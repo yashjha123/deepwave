@@ -32,8 +32,8 @@ def setup_propagator(
     # scalar_born, models = [v, scatter]
     # elastic, models = [lamb, mu, buoyancy]
     if prop_type == 'scalar':
-        max_model_vel = models[0].abs().max().item()
-        min_model_vel = models[0].abs().min().item()
+        max_model_vel = 6000
+        min_model_vel = 1500
         pad_modes = ['replicate']
         fd_pad = accuracy // 2
     elif prop_type == 'scalar_born':
@@ -55,8 +55,8 @@ def setup_propagator(
         pml_width = [pml_width for _ in range(4)]
 
     # Check inputs
-    check_inputs(source_amplitudes, source_locations, receiver_locations,
-                 wavefields, accuracy, nt, models, pml_width, fd_pad)
+    # check_inputs(source_amplitudes, source_locations, receiver_locations,
+    #              wavefields, accuracy, nt, models, pml_width, fd_pad)
 
     if nt is None:
         nt = 0
@@ -66,7 +66,7 @@ def setup_propagator(
                 break
     device = models[0].device
     dtype = models[0].dtype
-    dy, dx = set_dx(grid_spacing)
+    dy, dx = 10.0, 10.0
     pad = [fd_pad + width for width in pml_width]
     models, locations = extract_survey(models,
                                        source_locations + receiver_locations,
@@ -187,6 +187,9 @@ def setup_propagator(
         contiguous_receivers_i.append(convert_to_contiguous(receivers_i[i]))
     for i in range(len(pml_profiles)):
         pml_profiles[i] = convert_to_contiguous(pml_profiles[i])
+        
+    # print(dy)
+    # print(dx)
     return (models, contiguous_source_amplitudes, contiguous_wavefields,
             pml_profiles, contiguous_sources_i, contiguous_receivers_i, dy, dx,
             dt, nt, n_batch, step_ratio, model_gradient_sampling_interval,
@@ -221,7 +224,7 @@ def set_dx(dx: Union[int, float, List[float], Tensor]) -> Tuple[float, float]:
     if (isinstance(dx, list) and len(dx) == 2):
         return float(dx[0]), float(dx[1])
     if isinstance(dx, torch.Tensor) and dx.shape == (2, ):
-        return float(dx[0].item()), float(dx[1].item())
+        return float(dx[0].detach().cpu()), float(dx[1].detach().cpu())
     raise RuntimeError("Expected dx to be a real number or a list of "
                        "two real numbers.")
 

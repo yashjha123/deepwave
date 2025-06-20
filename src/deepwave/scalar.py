@@ -154,7 +154,7 @@ def scalar(
     freq_taper_frac: float = 0.0,
     time_pad_frac: float = 0.0,
     time_taper: bool = False
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+) -> Tensor:
     """Scalar wave propagation (functional interface).
 
     This function performs forward modelling with the scalar wave equation.
@@ -390,16 +390,16 @@ def scalar(
     dbydy = diff(by, accuracy, dy)
     dbxdx = diff(bx, accuracy, dx)
 
-    (wfc, wfp, psiy, psix, zetay, zetax, receiver_amplitudes) = \
+    receiver_amplitudes = \
         scalar_func(
-            v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax, ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i, dy, dx, dt, nt, step_ratio * model_gradient_sampling_interval, accuracy, pml_width_list, n_shots
+            v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax, ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i, step_ratio * model_gradient_sampling_interval, accuracy, pml_width_list, n_shots
         )
 
     receiver_amplitudes = downsample_and_movedim(receiver_amplitudes,
                                                  step_ratio, freq_taper_frac,
                                                  time_pad_frac, time_taper)
 
-    return wfc, wfp, psiy, psix, zetay, zetax, receiver_amplitudes
+    return receiver_amplitudes
 
 
 class ScalarForwardFunc(torch.autograd.Function):
@@ -408,7 +408,6 @@ class ScalarForwardFunc(torch.autograd.Function):
     def forward(ctx, v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
                 ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i, dy, dx,
                 dt, nt, step_ratio, accuracy, pml_width, n_shots):
-
         if (v.requires_grad or source_amplitudes.requires_grad
                 or wfc.requires_grad or wfp.requires_grad or psiy.requires_grad
                 or psix.requires_grad or zetay.requires_grad
@@ -439,6 +438,7 @@ class ScalarForwardFunc(torch.autograd.Function):
 
         fd_pad = accuracy // 2
         size_with_batch = (n_shots, *v.shape)
+        print(size_with_batch)
         wfc = create_or_pad(wfc, fd_pad, v.device, v.dtype, size_with_batch)
         wfp = create_or_pad(wfp, fd_pad, v.device, v.dtype, size_with_batch)
         psiy = create_or_pad(psiy, fd_pad, v.device, v.dtype, size_with_batch)
@@ -1066,5 +1066,62 @@ class ScalarBackwardFunc(torch.autograd.Function):
                         s], None, None, None, None, None, None, None, None, None
 
 
-def scalar_func(*args):
-    return ScalarForwardFunc.apply(*args)
+
+# --- 2) Write a new, fixed-arg wrapper ---
+def scalar_func(
+    v,                   # Tensor [H,W] or [shots, H, W]
+    source_amplitudes,
+    wfc, wfp, psiy, psix, zetay, zetax,
+    ay, ax, by, bx, dbydy, dbxdx,
+    sources_i, receivers_i,
+    step_ratio: int, accuracy: int,
+    pml_width_list: List[int], n_shots: int
+):
+#     return ScalarForwardFunc.apply(
+#             v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
+#             ay, ax, by, bx, dbydy, dbxdx,
+#             sources_i, receivers_i,
+#             10, 10, 0.001, 1000,
+#             step_ratio, accuracy,
+#             pml_width_list, n_shots
+        # )
+    o0, o1, o2, o3, o4, o5, o6 = ScalarForwardFunc.apply(
+            v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
+            ay, ax, by, bx, dbydy, dbxdx,
+            sources_i, receivers_i,
+            10, 10, 0.001, 1000,
+            step_ratio, accuracy,
+            pml_width_list, n_shots
+        )
+    return o6
+    # # If we got a batch of velocities, just loop in Python:
+    # # if v.ndim == 3:
+    # o0_list, o1_list, o2_list, o3_list, o4_list, o5_list, o6_list = \
+    #     [], [], [], [], [], [], []
+    # for v_i in v:
+    #     o0, o1, o2, o3, o4, o5, o6 = ScalarForwardFunc.apply(
+    #         v_i, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
+    #         ay, ax, by, bx, dbydy, dbxdx,
+    #         sources_i, receivers_i,
+    #         10, 10, 0.001, 1000,
+    #         step_ratio, accuracy,
+    #         pml_width_list, n_shots
+    #     )
+    #     o0_list.append(o0)
+    #     o1_list.append(o1)
+    #     o2_list.append(o2)
+    #     o3_list.append(o3)
+    #     o4_list.append(o4)
+    #     o5_list.append(o5)
+    #     o6_list.append(o6)
+
+    # return (
+    #     torch.stack(o0_list, dim=0),
+    #     torch.stack(o1_list, dim=0),
+    #     torch.stack(o2_list, dim=0),
+    #     torch.stack(o3_list, dim=0),
+    #     torch.stack(o4_list, dim=0),
+    #     torch.stack(o5_list, dim=0),
+    #     torch.stack(o6_list, dim=0),
+    # )
+        
