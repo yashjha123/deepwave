@@ -392,7 +392,7 @@ def scalar(
 
     receiver_amplitudes = \
         scalar_func(
-            v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax, ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i, step_ratio * model_gradient_sampling_interval, accuracy, pml_width_list, n_shots
+            v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax, ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i, dy, dx, dt, nt, step_ratio * model_gradient_sampling_interval, accuracy, pml_width_list, n_shots
         )
 
     receiver_amplitudes = downsample_and_movedim(receiver_amplitudes,
@@ -408,6 +408,7 @@ class ScalarForwardFunc(torch.autograd.Function):
     def forward(ctx, v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
                 ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i, dy, dx,
                 dt, nt, step_ratio, accuracy, pml_width, n_shots):
+        
         if (v.requires_grad or source_amplitudes.requires_grad
                 or wfc.requires_grad or wfp.requires_grad or psiy.requires_grad
                 or psix.requires_grad or zetay.requires_grad
@@ -424,7 +425,7 @@ class ScalarForwardFunc(torch.autograd.Function):
             ctx.accuracy = accuracy
             ctx.pml_width = pml_width
             ctx.source_amplitudes_requires_grad = source_amplitudes.requires_grad
-
+        # print(sources_i)
         v = v.contiguous()
         source_amplitudes = source_amplitudes.contiguous()
         ay = ay.contiguous()
@@ -438,7 +439,7 @@ class ScalarForwardFunc(torch.autograd.Function):
 
         fd_pad = accuracy // 2
         size_with_batch = (n_shots, *v.shape)
-        print(size_with_batch)
+        # print(size_with_batch)
         wfc = create_or_pad(wfc, fd_pad, v.device, v.dtype, size_with_batch)
         wfp = create_or_pad(wfp, fd_pad, v.device, v.dtype, size_with_batch)
         psiy = create_or_pad(psiy, fd_pad, v.device, v.dtype, size_with_batch)
@@ -1074,6 +1075,7 @@ def scalar_func(
     wfc, wfp, psiy, psix, zetay, zetax,
     ay, ax, by, bx, dbydy, dbxdx,
     sources_i, receivers_i,
+    dy: int, dx: int, dt: int, nt: int,
     step_ratio: int, accuracy: int,
     pml_width_list: List[int], n_shots: int
 ):
@@ -1089,9 +1091,9 @@ def scalar_func(
             v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
             ay, ax, by, bx, dbydy, dbxdx,
             sources_i, receivers_i,
-            10, 10, 0.001, 1000,
+            dy, dx, dt,nt,
             step_ratio, accuracy,
-            pml_width_list, n_shots
+            pml_width_list, n_shots,
         )
     return o6
     # # If we got a batch of velocities, just loop in Python:
