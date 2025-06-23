@@ -403,174 +403,134 @@ def scalar(
 
 
 class ScalarForwardFunc(torch.autograd.Function):
-
     @staticmethod
-    def forward(ctx, v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
-                ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i, dy, dx,
-                dt, nt, step_ratio, accuracy, pml_width, n_shots):
-        
-        if (v.requires_grad or source_amplitudes.requires_grad
-                or wfc.requires_grad or wfp.requires_grad or psiy.requires_grad
-                or psix.requires_grad or zetay.requires_grad
-                or zetax.requires_grad):
-            ctx.save_for_backward(v, ay, ax, by, bx, dbydy, dbxdx, sources_i,
-                                  receivers_i, source_amplitudes, wfc, wfp,
-                                  psiy, psix, zetay, zetax)
-            ctx.dy = dy
-            ctx.dx = dx
-            ctx.dt = dt
-            ctx.nt = nt
-            ctx.n_shots = n_shots
-            ctx.step_ratio = step_ratio
-            ctx.accuracy = accuracy
-            ctx.pml_width = pml_width
-            ctx.source_amplitudes_requires_grad = source_amplitudes.requires_grad
-        # print(sources_i)
-        v = v.contiguous()
-        source_amplitudes = source_amplitudes.contiguous()
-        ay = ay.contiguous()
-        ax = ax.contiguous()
-        by = by.contiguous()
-        bx = bx.contiguous()
-        dbydy = dbydy.contiguous()
-        dbxdx = dbxdx.contiguous()
-        sources_i = sources_i.contiguous()
-        receivers_i = receivers_i.contiguous()
+    def forward(
+                v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
+                ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i,
+                dy, dx, dt, nt, step_ratio, accuracy, pml_width, n_shots):
+        # ensure contiguous clones
+        # print("source_amplitudes.shape",source_amplitudes.shape)
+        v = v.contiguous().clone()
+        source_amplitudes = source_amplitudes.contiguous().clone()
+        for t in (ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i):
+            t = t.contiguous().clone()
 
+        # padding params
         fd_pad = accuracy // 2
         size_with_batch = (n_shots, *v.shape)
-        # print(size_with_batch)
-        wfc = create_or_pad(wfc, fd_pad, v.device, v.dtype, size_with_batch)
-        wfp = create_or_pad(wfp, fd_pad, v.device, v.dtype, size_with_batch)
-        psiy = create_or_pad(psiy, fd_pad, v.device, v.dtype, size_with_batch)
-        psix = create_or_pad(psix, fd_pad, v.device, v.dtype, size_with_batch)
-        zetay = create_or_pad(zetay, fd_pad, v.device, v.dtype,
-                              size_with_batch)
-        zetax = create_or_pad(zetax, fd_pad, v.device, v.dtype,
-                              size_with_batch)
-        zero_interior(psiy, 2 * fd_pad, pml_width, True)
-        zero_interior(psix, 2 * fd_pad, pml_width, False)
-        zero_interior(zetay, 2 * fd_pad, pml_width, True)
-        zero_interior(zetax, 2 * fd_pad, pml_width, False)
+        wfc = create_or_pad(wfc, fd_pad, v.device, v.dtype, size_with_batch).clone()
+        wfp = create_or_pad(wfp, fd_pad, v.device, v.dtype, size_with_batch).clone()
+        psiy = create_or_pad(psiy, fd_pad, v.device, v.dtype, size_with_batch).clone()
+        psix = create_or_pad(psix, fd_pad, v.device, v.dtype, size_with_batch).clone()
+        zetay = create_or_pad(zetay, fd_pad, v.device, v.dtype, size_with_batch).clone()
+        zetax = create_or_pad(zetax, fd_pad, v.device, v.dtype, size_with_batch).clone()
+        zero_interior(psiy, 2*fd_pad, pml_width, True)
+        zero_interior(psix, 2*fd_pad, pml_width, False)
+        zero_interior(zetay,2*fd_pad, pml_width, True)
+        zero_interior(zetax,2*fd_pad, pml_width, False)
 
-        device = v.device
-        dtype = v.dtype
-        ny = v.shape[0]
-        nx = v.shape[1]
-        n_sources_per_shot = sources_i.numel() // n_shots
-        n_receivers_per_shot = receivers_i.numel() // n_shots
-        psiyn = torch.zeros_like(psiy)
-        psixn = torch.zeros_like(psix)
-        dwdv = torch.empty(0, device=device, dtype=dtype)
-        receiver_amplitudes = torch.empty(0, device=device, dtype=dtype)
-        pml_y0 = min(pml_width[0] + 2 * fd_pad, ny - fd_pad)
-        pml_y1 = max(pml_y0, ny - pml_width[1] - 2 * fd_pad)
-        pml_x0 = min(pml_width[2] + 2 * fd_pad, nx - fd_pad)
-        pml_x1 = max(pml_x0, nx - pml_width[3] - 2 * fd_pad)
-
-        if v.is_cuda:
-            aux = v.get_device()
-            if v.requires_grad:
-                dwdv.resize_(nt // step_ratio, n_shots, *v.shape)
-                dwdv.fill_(0)
-            if receivers_i.numel() > 0:
-                receiver_amplitudes.resize_(nt, n_shots, n_receivers_per_shot)
-                receiver_amplitudes.fill_(0)
-            if dtype == torch.float32:
-                if accuracy == 2:
-                    forward = deepwave.dll_cuda.scalar_iso_2_float_forward
-                elif accuracy == 4:
-                    forward = deepwave.dll_cuda.scalar_iso_4_float_forward
-                elif accuracy == 6:
-                    forward = deepwave.dll_cuda.scalar_iso_6_float_forward
-                else:
-                    forward = deepwave.dll_cuda.scalar_iso_8_float_forward
-            else:
-                if accuracy == 2:
-                    forward = deepwave.dll_cuda.scalar_iso_2_double_forward
-                elif accuracy == 4:
-                    forward = deepwave.dll_cuda.scalar_iso_4_double_forward
-                elif accuracy == 6:
-                    forward = deepwave.dll_cuda.scalar_iso_6_double_forward
-                else:
-                    forward = deepwave.dll_cuda.scalar_iso_8_double_forward
+        # allocate aux buffers ALWAYS with correct shapes
+        ny, nx = v.shape
+        dwdv_shape = (nt // step_ratio, n_shots, ny, nx)
+        dwdv = torch.zeros(dwdv_shape, device=v.device, dtype=v.dtype)
+        n_receivers_per_shot = receivers_i.numel() // n_shots if receivers_i.numel()>0 else 0
+        if n_receivers_per_shot > 0:
+            recv_shape = (nt, n_shots, n_receivers_per_shot)
+            receiver_amplitudes = torch.zeros(recv_shape, device=v.device, dtype=v.dtype)
         else:
-            if deepwave.use_openmp:
-                aux = min(n_shots, torch.get_num_threads())
-            else:
-                aux = 1
-            if v.requires_grad:
-                dwdv.resize_(n_shots, nt // step_ratio, *v.shape)
-                dwdv.fill_(0)
-            if receivers_i.numel() > 0:
-                receiver_amplitudes.resize_(n_shots, nt, n_receivers_per_shot)
-                receiver_amplitudes.fill_(0)
-            if dtype == torch.float32:
-                if accuracy == 2:
-                    forward = deepwave.dll_cpu.scalar_iso_2_float_forward
-                elif accuracy == 4:
-                    forward = deepwave.dll_cpu.scalar_iso_4_float_forward
-                elif accuracy == 6:
-                    forward = deepwave.dll_cpu.scalar_iso_6_float_forward
-                else:
-                    forward = deepwave.dll_cpu.scalar_iso_8_float_forward
-            else:
-                if accuracy == 2:
-                    forward = deepwave.dll_cpu.scalar_iso_2_double_forward
-                elif accuracy == 4:
-                    forward = deepwave.dll_cpu.scalar_iso_4_double_forward
-                elif accuracy == 6:
-                    forward = deepwave.dll_cpu.scalar_iso_6_double_forward
-                else:
-                    forward = deepwave.dll_cpu.scalar_iso_8_double_forward
+            receiver_amplitudes = torch.zeros((0,), device=v.device, dtype=v.dtype)
 
-        if wfc.numel() > 0 and nt > 0:
-            forward(v.data_ptr(), source_amplitudes.data_ptr(), wfc.data_ptr(),
-                    wfp.data_ptr(), psiy.data_ptr(), psix.data_ptr(),
-                    psiyn.data_ptr(), psixn.data_ptr(), zetay.data_ptr(),
-                    zetax.data_ptr(), dwdv.data_ptr(),
-                    receiver_amplitudes.data_ptr(), ay.data_ptr(),
-                    ax.data_ptr(), by.data_ptr(), bx.data_ptr(),
-                    dbydy.data_ptr(), dbxdx.data_ptr(), sources_i.data_ptr(),
-                    receivers_i.data_ptr(), 1 / dy, 1 / dx, 1 / dy**2,
-                    1 / dx**2, dt**2, nt, n_shots, ny, nx, n_sources_per_shot,
-                    n_receivers_per_shot, step_ratio, v.requires_grad, pml_y0,
-                    pml_y1, pml_x0, pml_x1, aux)
+        # compute PML limits
+        pml_y0 = min(pml_width[0] + 2*fd_pad, ny - fd_pad)
+        pml_y1 = max(pml_y0, ny - pml_width[1] - 2*fd_pad)
+        pml_x0 = min(pml_width[2] + 2*fd_pad, nx - fd_pad)
+        pml_x1 = max(pml_x0, nx - pml_width[3] - 2*fd_pad)
 
-        ctx.dwdv = dwdv
+        # select and call kernel
+        aux_par = v.get_device() if v.is_cuda else (min(n_shots, torch.get_num_threads()) if deepwave.use_openmp else 1)
+        forward_kernel = select_forward_kernel(v.is_cuda, v.dtype, accuracy)
+        forward_kernel(
+            v.data_ptr(), source_amplitudes.data_ptr(),
+            wfc.data_ptr(), wfp.data_ptr(), psiy.data_ptr(), psix.data_ptr(),
+            torch.zeros_like(psiy).data_ptr(), torch.zeros_like(psix).data_ptr(),
+            zetay.data_ptr(), zetax.data_ptr(),
+            dwdv.data_ptr(), receiver_amplitudes.data_ptr(),
+            ay.data_ptr(), ax.data_ptr(), by.data_ptr(), bx.data_ptr(),
+            dbydy.data_ptr(), dbxdx.data_ptr(), sources_i.data_ptr(), receivers_i.data_ptr(),
+            1/dy, 1/dx, 1/dy**2, 1/dx**2, dt**2,
+            nt, n_shots, ny, nx,
+            sources_i.numel()//n_shots, n_receivers_per_shot,
+            step_ratio, v.requires_grad,
+            pml_y0, pml_y1, pml_x0, pml_x1,
+            aux_par
+        )
 
+        # slice padded
         s = (slice(None), slice(fd_pad, -fd_pad), slice(fd_pad, -fd_pad))
-        if nt % 2 == 0:
-            return (wfc[s], wfp[s], psiy[s], psix[s], zetay[s], zetax[s],
-                    receiver_amplitudes)
-        else:
-            return (wfp[s], wfc[s], psiyn[s], psixn[s], zetay[s], zetax[s],
-                    receiver_amplitudes)
+        primary = (wfc[s], wfp[s], psiy[s], psix[s], zetay[s], zetax[s], receiver_amplitudes) if nt%2==0 else (wfp[s], wfc[s], torch.zeros_like(psiy)[s], torch.zeros_like(psix)[s], zetay[s], zetax[s], receiver_amplitudes)
+
+        # return primary + aux dwdv
+        return (*primary, dwdv)
 
     @staticmethod
-    def backward(ctx, gwfc, gwfp, gpsiy, gpsix, gzetay, gzetax, grad_r):
-        (v, ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i,
-         source_amplitudes, wfc, wfp, psiy, psix, zetay,
-         zetax) = ctx.saved_tensors
-        dy = ctx.dy
-        dx = ctx.dx
-        dt = ctx.dt
-        nt = ctx.nt
-        n_shots = ctx.n_shots
-        step_ratio = ctx.step_ratio
-        accuracy = ctx.accuracy
-        pml_width = ctx.pml_width
-        source_amplitudes_requires_grad = ctx.source_amplitudes_requires_grad
-        dwdv = ctx.dwdv
+    def setup_context(ctx, inputs, outputs):
+        (v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
+         ay, ax, by, bx, dbydy, dbxdx, sources_i, receivers_i,
+         dy, dx, dt, nt, step_ratio, accuracy, pml_width, n_shots) = inputs
+        (wfc_out, wfp_out, psiy_out, psix_out, zetay_out, zetax_out,
+         receiver_amplitudes, dwdv) = outputs
+        ctx.save_for_backward(v, ay, ax, by, bx, dbydy, dbxdx,
+                              sources_i, receivers_i,
+                              source_amplitudes, wfc, wfp,
+                              psiy, psix, zetay, zetax,
+                              dwdv)
+        ctx.dy, ctx.dx, ctx.dt = dy, dx, dt
+        ctx.nt, ctx.n_shots = nt, n_shots
+        ctx.step_ratio, ctx.accuracy = step_ratio, accuracy
+        ctx.pml_width, ctx.src_amp_grad = pml_width, source_amplitudes.requires_grad
 
-        return ScalarBackwardFunc.apply(
-            gwfc, gwfp, gpsiy, gpsix, gzetay, gzetax, grad_r, v, ay, ax, by,
-            bx, dbydy, dbxdx, sources_i, receivers_i, dwdv, source_amplitudes,
-            wfc, wfp, psiy, psix, zetay, zetax, dy, dx, dt, nt, n_shots,
-            step_ratio, accuracy, pml_width,
-            source_amplitudes_requires_grad) + (None, ) * 16
+    @staticmethod
+    def backward(ctx, gwfc, gwfp, gpsiy, gpsix, gzetay, gzetax, grad_r, grad_dwdv):
+        (v, ay, ax, by, bx, dbydy, dbxdx,
+         sources_i, receivers_i,
+         source_amplitudes, wfc, wfp,
+         psiy, psix, zetay, zetax,
+         dwdv) = ctx.saved_tensors
+        dy, dx, dt = ctx.dy, ctx.dx, ctx.dt
+        nt, n_shots = ctx.nt, ctx.n_shots
+        step_ratio, accuracy = ctx.step_ratio, ctx.accuracy
+        pml_width, src_amp_grad = ctx.pml_width, ctx.src_amp_grad
+        grads = ScalarBackwardFunc.apply(
+            gwfc, gwfp, gpsiy, gpsix, gzetay, gzetax, grad_r,
+            v, ay, ax, by, bx, dbydy, dbxdx,
+            sources_i, receivers_i, dwdv,
+            source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
+            dy, dx, dt, nt, n_shots, step_ratio, accuracy, pml_width, src_amp_grad
+        )
+        grad_v, grad_f, grad_wfc, grad_wfp, grad_psiy, grad_psix, grad_zetay, grad_zetax = grads
+        # if source_amplitudes had an extra leading dim, unsqueeze grad_f to match
+        # if grad_f.ndim + 1 == source_amplitudes.ndim and source_amplitudes.shape[1:] == grad_f.shape:
+            # grad_f = grad_f.unsqueeze(0)
+        return (grad_v, grad_f, grad_wfc, grad_wfp, grad_psiy, grad_psix, grad_zetay, grad_zetax, *(None,)*16)
+
+    @staticmethod
+    def vmap(info, in_dims, *args):
+        # print(in_dims)
+        assert in_dims[0] is not None, "v must be batched"
+        # for dim in in_dims[1:]: assert dim is None, "other args must be constant"
+        v, amplt, *rest = args
+        v0 = v.movedim(in_dims[0], 0)
+        amplt = amplt.movedim(in_dims[0], 0) if amplt is not None else None
+        B = info.batch_size
+        outs = [ScalarForwardFunc.apply(v0[i], amplt[i], *rest) for i in range(B)]
+        stacked = [torch.stack([o[j] for o in outs], dim=0) for j in range(len(outs[0]))]
+        return tuple(stacked), (0,) * len(stacked)
 
 
+def select_forward_kernel(is_cuda, dtype, accuracy):
+    mod = deepwave.dll_cuda if is_cuda else deepwave.dll_cpu
+    suffix = 'float' if dtype==torch.float32 else 'double'
+    return getattr(mod, f"scalar_iso_{accuracy}_{suffix}_forward")
 class ScalarBackwardFunc(torch.autograd.Function):
 
     @staticmethod
@@ -580,19 +540,19 @@ class ScalarBackwardFunc(torch.autograd.Function):
                 dt, nt, n_shots, step_ratio, accuracy, pml_width,
                 source_amplitudes_requires_grad):
 
-        ctx.save_for_backward(gwfc, gwfp, gpsiy, gpsix, gzetay, gzetax, grad_r,
-                              v, ay, ax, by, bx, dbydy, dbxdx, sources_i,
-                              receivers_i, source_amplitudes, wfc, wfp, psiy,
-                              psix, zetay, zetax)
-        ctx.dy = dy
-        ctx.dx = dx
-        ctx.dt = dt
-        ctx.nt = nt
-        ctx.n_shots = n_shots
-        ctx.step_ratio = step_ratio
-        ctx.accuracy = accuracy
-        ctx.pml_width = pml_width
-        ctx.source_amplitudes_requires_grad = source_amplitudes.requires_grad
+        # ctx.save_for_backward(gwfc, gwfp, gpsiy, gpsix, gzetay, gzetax, grad_r,
+        #                       v, ay, ax, by, bx, dbydy, dbxdx, sources_i,
+        #                       receivers_i, source_amplitudes, wfc, wfp, psiy,
+        #                       psix, zetay, zetax)
+        # ctx.dy = dy
+        # ctx.dx = dx
+        # ctx.dt = dt
+        # ctx.nt = nt
+        # ctx.n_shots = n_shots
+        # ctx.step_ratio = step_ratio
+        # ctx.accuracy = accuracy
+        # ctx.pml_width = pml_width
+        # ctx.source_amplitudes_requires_grad = source_amplitudes.requires_grad
 
         v = v.contiguous()
         grad_r = grad_r.contiguous()
@@ -1068,62 +1028,22 @@ class ScalarBackwardFunc(torch.autograd.Function):
 
 
 
-# --- 2) Write a new, fixed-arg wrapper ---
 def scalar_func(
     v,                   # Tensor [H,W] or [shots, H, W]
     source_amplitudes,
     wfc, wfp, psiy, psix, zetay, zetax,
     ay, ax, by, bx, dbydy, dbxdx,
     sources_i, receivers_i,
-    dy: int, dx: int, dt: int, nt: int,
+    dy: float, dx: float, dt: float, nt: int,
     step_ratio: int, accuracy: int,
     pml_width_list: List[int], n_shots: int
 ):
-#     return ScalarForwardFunc.apply(
-#             v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
-#             ay, ax, by, bx, dbydy, dbxdx,
-#             sources_i, receivers_i,
-#             10, 10, 0.001, 1000,
-#             step_ratio, accuracy,
-#             pml_width_list, n_shots
-        # )
-    o0, o1, o2, o3, o4, o5, o6 = ScalarForwardFunc.apply(
-            v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
-            ay, ax, by, bx, dbydy, dbxdx,
-            sources_i, receivers_i,
-            dy, dx, dt,nt,
-            step_ratio, accuracy,
-            pml_width_list, n_shots,
-        )
-    return o6
-    # # If we got a batch of velocities, just loop in Python:
-    # # if v.ndim == 3:
-    # o0_list, o1_list, o2_list, o3_list, o4_list, o5_list, o6_list = \
-    #     [], [], [], [], [], [], []
-    # for v_i in v:
-    #     o0, o1, o2, o3, o4, o5, o6 = ScalarForwardFunc.apply(
-    #         v_i, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
-    #         ay, ax, by, bx, dbydy, dbxdx,
-    #         sources_i, receivers_i,
-    #         10, 10, 0.001, 1000,
-    #         step_ratio, accuracy,
-    #         pml_width_list, n_shots
-    #     )
-    #     o0_list.append(o0)
-    #     o1_list.append(o1)
-    #     o2_list.append(o2)
-    #     o3_list.append(o3)
-    #     o4_list.append(o4)
-    #     o5_list.append(o5)
-    #     o6_list.append(o6)
 
-    # return (
-    #     torch.stack(o0_list, dim=0),
-    #     torch.stack(o1_list, dim=0),
-    #     torch.stack(o2_list, dim=0),
-    #     torch.stack(o3_list, dim=0),
-    #     torch.stack(o4_list, dim=0),
-    #     torch.stack(o5_list, dim=0),
-    #     torch.stack(o6_list, dim=0),
-    # )
-        
+    # apply and return only receiver amplitudes
+    *_, rec, _ = ScalarForwardFunc.apply(
+        v, source_amplitudes, wfc, wfp, psiy, psix, zetay, zetax,
+        ay, ax, by, bx, dbydy, dbxdx,
+        sources_i, receivers_i,
+        dy, dx, dt, nt, step_ratio, accuracy, pml_width_list, n_shots
+    )
+    return rec
